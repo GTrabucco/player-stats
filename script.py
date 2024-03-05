@@ -6,13 +6,18 @@ from pyquery import PyQuery as pq
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import urllib3
 from selenium.common.exceptions import WebDriverException
 import time
 import os
 import re
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
 
 MAX_LINKS = 50
+
+dfs = []
+
 
 class stats_guy:
     def __init__(self, sdql):
@@ -21,13 +26,28 @@ class stats_guy:
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument('--log-level=3')
+        options.add_argument("--log-level=3")
         self.driver = webdriver.Chrome(service=chrome_service, options=options)
-        self.sdql = sdql + " and date < " + datetime.now().date().strftime('%Y%m%d')
+        self.sdql = sdql + " and date < " + datetime.now().date().strftime("%Y%m%d")
         self.html = ""
         self.links = set()
         self.failed_links = []
-        
+
+    def __init__(self, name, season, type):
+        self.name = name
+        self.season = season
+        self.type = type
+        chrome_service = Service(ChromeDriverManager().install())
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--log-level=3")
+        self.driver = webdriver.Chrome(service=chrome_service, options=options)
+        self.sdql = "team=" + team + " and season=" + season + " and " + type
+        self.html = ""
+        self.links = set()
+        self.failed_links = []
 
     def __del__(self):
         self.driver.quit()
@@ -36,7 +56,7 @@ class stats_guy:
         retries = 3
         while retries > 0:
             try:
-                print('get: ', url)
+                print("get: ", url)
                 self.driver.get(url)
                 return self.driver.page_source
             except Exception as e:
@@ -57,13 +77,13 @@ class stats_guy:
     def get_killersports_links(self):
         doc = pq(self.get_killersports_html())
         table = doc("#DT_Table")
-        results_length = len(list(table('tbody tr').items()))
+        results_length = len(list(table("tbody tr").items()))
         anchor_tags = table.find("a")
         anchor_values = [a.attrib["href"] for a in anchor_tags]
         updated_values = [value.replace("UTH", "UTA") for value in anchor_values]
         self.links.update(updated_values)
         if results_length == MAX_LINKS:
-            earliest_date = table('tbody tr > td').eq(0).text()
+            earliest_date = table("tbody tr > td").eq(0).text()
             date_object = datetime.strptime(earliest_date, "%b %d, %Y")
             formatted_date = date_object.strftime("%Y%m%d")
             self.sdql += " and date <= " + formatted_date
@@ -97,19 +117,19 @@ class stats_guy:
         data = pd.DataFrame(columns=columns)
         data = []
         for link in self.links:
-            pattern = r'\/boxscores\/(.+)\.html'
+            pattern = r"\/boxscores\/(.+)\.html"
             match = re.search(pattern, link)
             file_path = os.path.join("data", match.group(1))
             print(file_path)
             if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as file:
+                with open(file_path, "r", encoding="utf-8") as file:
                     html = file.read()
             else:
-                time.sleep(3)          
+                time.sleep(3)
                 html = self.get_html(link)
-                with open(file_path, 'w', encoding='utf-8') as file:
+                with open(file_path, "w", encoding="utf-8") as file:
                     file.write(html)
-            
+
             if html:
                 doc = pq(html)
                 tables = doc("table[id*=box][id*=game-basic]")
@@ -187,14 +207,17 @@ class stats_guy:
                                                 new_player[columns[idx]] = 0
                                             else:
                                                 new_player[columns[idx]] = round(
-                                                    new_player["FG"] / new_player["FGA"], 2
+                                                    new_player["FG"]
+                                                    / new_player["FGA"],
+                                                    2,
                                                 )
                                         elif columns[idx] == "FG3_PCT":
                                             if new_player["FG3"] == 0:
                                                 new_player[columns[idx]] = 0
                                             else:
                                                 new_player[columns[idx]] = round(
-                                                    new_player["FG3"] / new_player["FG3A"],
+                                                    new_player["FG3"]
+                                                    / new_player["FG3A"],
                                                     2,
                                                 )
                                         elif columns[idx] == "FT_PCT":
@@ -202,7 +225,9 @@ class stats_guy:
                                                 new_player[columns[idx]] = 0
                                             else:
                                                 new_player[columns[idx]] = round(
-                                                    new_player["FT"] / new_player["FTA"], 2
+                                                    new_player["FT"]
+                                                    / new_player["FTA"],
+                                                    2,
                                                 )
                                         else:
                                             new_player[columns[idx]] = int(val_text)
@@ -216,7 +241,7 @@ class stats_guy:
 
                         new_player["G"] = 1
                         data.append(new_player)
-            
+
         data = pd.DataFrame(data)
         data.insert(1, "BPM", round(data["PLUS_MINUS"] / data["G"], 2))
         data.insert(1, "BPG", round(data["BLK"] / data["G"], 2))
@@ -233,44 +258,145 @@ class stats_guy:
         data.insert(1, "FTATT", round(data["FTA"] / data["G"], 2))
         data.insert(1, "TPG", round(data["TOV"] / data["G"], 2))
         data.insert(1, "FPG", round(data["PF"] / data["G"], 2))
-        data.insert(1, "P + R + A", round(round(data["PTS"] / data["G"], 2) + round(data["TRB"] / data["G"], 2) + round(data["AST"] / data["G"], 2), 2))
-
-        data = data[[
-            "Player",
-            "MP",
-            "G",
-            "MPG",
-            "PPG",
-            "RPG",
-            "APG",
+        data.insert(
+            1,
             "P + R + A",
-            "3P",
-            "FGM",
-            "FGATT",
-            "FG_PCT",
-            "3PA",
-            "FG3_PCT",
-            "FTM",
-            "FTATT",
-            "FT_PCT",
-            "SPG",
-            "BPG",
-            "TPG",
-            "FPG",
-            "BPM"
-        ]]
+            round(
+                round(data["PTS"] / data["G"], 2)
+                + round(data["TRB"] / data["G"], 2)
+                + round(data["AST"] / data["G"], 2),
+                2,
+            ),
+        )
 
+        data.insert(1, "TYPE", self.type)
+
+        data = data[
+            [
+                "Player",
+                "TYPE",
+                "MP",
+                "G",
+                "MPG",
+                "PPG",
+                "RPG",
+                "APG",
+                "P + R + A",
+                "3P",
+                "FGM",
+                "FGATT",
+                "FG_PCT",
+                "3PA",
+                "FG3_PCT",
+                "FTM",
+                "FTATT",
+                "FT_PCT",
+                "SPG",
+                "BPG",
+                "TPG",
+                "FPG",
+                "BPM",
+            ]
+        ]
 
         data_sorted = data.sort_values(by="MP", ascending=False)
-        data_sorted.to_csv(
-            "C:\\Users\\GiulianTrabucco\\OneDrive - Buyers Edge Platform\\Desktop\\player-stats\\results.txt",
+        filtered_data = data_sorted[data_sorted["G"] >= 5]
+        filtered_data = data_sorted[data_sorted["MP"] >= 250]
+        filtered_data = data_sorted[data_sorted["MPG"] >= 15]
+        dfs.append(filtered_data)
+        filtered_data.to_csv(
+            "C:\\Users\\giuli\\Desktop\\player-stats\\results.txt",
             sep="\t",
             index=False,
-            )
-    
+        )
+
     def run(self):
         self.get_killersports_links()
         self.get_player_stats()
 
+
 sg = stats_guy(sys.argv[1])
 sg.run()
+
+
+# team_names = [
+#     "Bulls",
+#     "Pelicans",
+#     "Celtics",
+#     "Bucks",
+#     "Clippers",
+#     "Suns",
+#     "Hawks",
+#     "Pacers",
+#     "Jazz",
+#     "Supersonics",
+#     "Kings",
+#     "Timberwolves",
+#     "Lakers",
+#     "Nuggets",
+#     "Magic",
+#     "Cavaliers",
+#     "Pistons",
+#     "Knicks",
+#     "Raptors",
+#     "Nets",
+#     "Rockets",
+#     "Warriors",
+#     "Seventysixers",
+#     "Wizards",
+#     "Spurs",
+#     "Mavericks",
+#     "Trailblazers",
+#     "Grizzlies",
+#     "Heat",
+#     "Hornets",
+#     "Thunder",
+# ]
+# qs = ["HF", "HD", "AF", "AD"]
+
+# for team in team_names:
+#     for type in qs:
+#         sg = stats_guy(team, "2023", type)
+#         sg.run()
+#     df = pd.concat(dfs)
+#     df = df[df["G"] >= 5]
+#     df = df[df["MP"] >= 250]
+#     df = df[df["MPG"] >= 15]
+#     # Group by player
+#     grouped = df.groupby("Player")
+#     grouped_filtered = grouped.filter(lambda x: len(x) == 4)
+#     for player, group in grouped_filtered.groupby("Player"):
+#         # Set up the subplots
+#         fig, ax = plt.subplots()
+
+#         # Get the stats and types for the player
+#         stats = df.columns[2:]  # Assuming the stats columns start from index 2
+#         types = group["TYPE"].unique()
+#         num_types = len(types)
+#         bar_width = 0.35
+
+#         # Set the index for the x-axis ticks
+#         index = range(len(stats))
+
+#         # Plot bars for each type
+#         for i, t in enumerate(types):
+#             t_group = group[group["TYPE"] == t]
+#             ax.bar(
+#                 [x + i * bar_width for x in index],
+#                 t_group.iloc[:, 2:],
+#                 bar_width,
+#                 label=t,
+#             )
+
+#         # Customize the plot
+#         ax.set_xlabel("Stats")
+#         ax.set_ylabel("Values")
+#         ax.set_title(f"Stats for {player}")
+#         ax.set_xticks([x + (num_types - 1) * bar_width / 2 for x in index])
+#         ax.set_xticklabels(stats)
+#         ax.legend()
+
+#         # Show the plot
+#         plt.show()
+#     dfs = []
+#     exit()
