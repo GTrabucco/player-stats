@@ -17,8 +17,13 @@ from sklearn.cluster import KMeans
 MAX_LINKS = 50
 
 dfs = []
+rows = []
 
-
+class game_row:
+    def __init__(self, url, team):
+        self.url = url
+        self.team = team
+    
 class stats_guy:
     def __init__(self, sdql):
         chrome_service = Service(ChromeDriverManager().install())
@@ -30,24 +35,6 @@ class stats_guy:
         self.driver = webdriver.Chrome(service=chrome_service, options=options)
         self.sdql = sdql + " and date < " + datetime.now().date().strftime("%Y%m%d")
         self.html = ""
-        self.links = set()
-        self.failed_links = []
-
-    def __init__(self, name, season, type):
-        self.name = name
-        self.season = season
-        self.type = type
-        chrome_service = Service(ChromeDriverManager().install())
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--log-level=3")
-        self.driver = webdriver.Chrome(service=chrome_service, options=options)
-        self.sdql = "team=" + team + " and season=" + season + " and " + type
-        self.html = ""
-        self.links = set()
-        self.failed_links = []
 
     def __del__(self):
         self.driver.quit()
@@ -66,7 +53,6 @@ class stats_guy:
                 if retries == 0:
                     print(f"Maximum retries reached for url: {url}")
                     print()
-                    self.failed_links.append(url)
                     return None
 
     def get_killersports_html(self):
@@ -78,10 +64,13 @@ class stats_guy:
         doc = pq(self.get_killersports_html())
         table = doc("#DT_Table")
         results_length = len(list(table("tbody tr").items()))
-        anchor_tags = table.find("a")
-        anchor_values = [a.attrib["href"] for a in anchor_tags]
-        updated_values = [value.replace("UTH", "UTA") for value in anchor_values]
-        self.links.update(updated_values)
+
+        for row in table("tbody tr").items():
+            link = row('td').eq(1)('a').attr('href')
+            link = link.replace("UTH", "UTA")
+            t1 = row('td').eq(4).text()
+            rows.append(game_row(link, t1))
+
         if results_length == MAX_LINKS:
             earliest_date = table("tbody tr > td").eq(0).text()
             date_object = datetime.strptime(earliest_date, "%b %d, %Y")
@@ -116,7 +105,8 @@ class stats_guy:
         ]
         data = pd.DataFrame(columns=columns)
         data = []
-        for link in self.links:
+        for row in rows:
+            link = row.url
             pattern = r"\/boxscores\/(.+)\.html"
             match = re.search(pattern, link)
             file_path = os.path.join("data", match.group(1))
@@ -133,7 +123,18 @@ class stats_guy:
             if html:
                 doc = pq(html)
                 tables = doc("table[id*=box][id*=game-basic]")
-                for row in tables("tbody tr").items():
+                
+                table1_team = tables('caption').eq(0).text()
+                table2_team = tables('caption').eq(1).text()
+
+                table = None
+
+                if row.team in table1_team:
+                    table = tables.eq(0)
+                elif row.team in table2_team:
+                    table = tables.eq(1)
+
+                for row in table("tbody tr").items():
                     player_name = row('th[data-stat="player"] a').text()
                     if not player_name:
                         continue
@@ -147,6 +148,7 @@ class stats_guy:
                     player_exists = [
                         player for player in data if player["Player"] == player_name
                     ]
+
                     if player_exists:
                         player = player_exists[0]
                         for idx, val in enumerate(row("td").items(), start=1):
@@ -269,12 +271,9 @@ class stats_guy:
             ),
         )
 
-        data.insert(1, "TYPE", self.type)
-
         data = data[
             [
                 "Player",
-                "TYPE",
                 "MP",
                 "G",
                 "MPG",
@@ -300,12 +299,8 @@ class stats_guy:
         ]
 
         data_sorted = data.sort_values(by="MP", ascending=False)
-        filtered_data = data_sorted[data_sorted["G"] >= 5]
-        filtered_data = data_sorted[data_sorted["MP"] >= 250]
-        filtered_data = data_sorted[data_sorted["MPG"] >= 15]
-        dfs.append(filtered_data)
-        filtered_data.to_csv(
-            "C:\\Users\\giuli\\Desktop\\player-stats\\results.txt",
+        data_sorted.to_csv(
+            "C:\\Users\\GiulianTrabucco\\OneDrive - Buyers Edge Platform\\Desktop\\player-stats\\results.txt",
             sep="\t",
             index=False,
         )
@@ -314,89 +309,5 @@ class stats_guy:
         self.get_killersports_links()
         self.get_player_stats()
 
-
 sg = stats_guy(sys.argv[1])
 sg.run()
-
-
-# team_names = [
-#     "Bulls",
-#     "Pelicans",
-#     "Celtics",
-#     "Bucks",
-#     "Clippers",
-#     "Suns",
-#     "Hawks",
-#     "Pacers",
-#     "Jazz",
-#     "Supersonics",
-#     "Kings",
-#     "Timberwolves",
-#     "Lakers",
-#     "Nuggets",
-#     "Magic",
-#     "Cavaliers",
-#     "Pistons",
-#     "Knicks",
-#     "Raptors",
-#     "Nets",
-#     "Rockets",
-#     "Warriors",
-#     "Seventysixers",
-#     "Wizards",
-#     "Spurs",
-#     "Mavericks",
-#     "Trailblazers",
-#     "Grizzlies",
-#     "Heat",
-#     "Hornets",
-#     "Thunder",
-# ]
-# qs = ["HF", "HD", "AF", "AD"]
-
-# for team in team_names:
-#     for type in qs:
-#         sg = stats_guy(team, "2023", type)
-#         sg.run()
-#     df = pd.concat(dfs)
-#     df = df[df["G"] >= 5]
-#     df = df[df["MP"] >= 250]
-#     df = df[df["MPG"] >= 15]
-#     # Group by player
-#     grouped = df.groupby("Player")
-#     grouped_filtered = grouped.filter(lambda x: len(x) == 4)
-#     for player, group in grouped_filtered.groupby("Player"):
-#         # Set up the subplots
-#         fig, ax = plt.subplots()
-
-#         # Get the stats and types for the player
-#         stats = df.columns[2:]  # Assuming the stats columns start from index 2
-#         types = group["TYPE"].unique()
-#         num_types = len(types)
-#         bar_width = 0.35
-
-#         # Set the index for the x-axis ticks
-#         index = range(len(stats))
-
-#         # Plot bars for each type
-#         for i, t in enumerate(types):
-#             t_group = group[group["TYPE"] == t]
-#             ax.bar(
-#                 [x + i * bar_width for x in index],
-#                 t_group.iloc[:, 2:],
-#                 bar_width,
-#                 label=t,
-#             )
-
-#         # Customize the plot
-#         ax.set_xlabel("Stats")
-#         ax.set_ylabel("Values")
-#         ax.set_title(f"Stats for {player}")
-#         ax.set_xticks([x + (num_types - 1) * bar_width / 2 for x in index])
-#         ax.set_xticklabels(stats)
-#         ax.legend()
-
-#         # Show the plot
-#         plt.show()
-#     dfs = []
-#     exit()
