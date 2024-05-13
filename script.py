@@ -13,19 +13,19 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
+from flask import Flask, request, render_template
+
+app = Flask(__name__)
 
 MAX_LINKS = 50
-
-dfs = []
-rows = []
 
 class game_row:
     def __init__(self, url, team):
         self.url = url
         self.team = team
-    
-class stats_guy:
-    def __init__(self, sdql):
+
+class web_driver:
+    def __init__(self):
         chrome_service = Service(ChromeDriverManager().install())
         options = webdriver.ChromeOptions()
         options.add_argument("--headless")
@@ -33,27 +33,32 @@ class stats_guy:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--log-level=3")
         self.driver = webdriver.Chrome(service=chrome_service, options=options)
+
+driver = web_driver()
+
+class stats_guy:
+    def __init__(self, sdql):       
         self.sdql = sdql + " and date < " + datetime.now().date().strftime("%Y%m%d")
         self.html = ""
+        self.rows = []
 
     def __del__(self):
-        self.driver.quit()
+        global driver
+        driver.driver.quit()
 
     def get_html(self, url):
+        global driver
         retries = 3
         while retries > 0:
             try:
-                print("get: ", url)
-                self.driver.get(url)
-                return self.driver.page_source
+                print("get: ", url)             
+                driver.driver.get(url)
+                return driver.driver.page_source
             except Exception as e:
-                retries -= 1
                 print(f"Error occurred while fetching HTML for url: {url}")
                 print(f"Exception: {e}")
-                if retries == 0:
-                    print(f"Maximum retries reached for url: {url}")
-                    print()
-                    return None
+                driver.driver.quit()
+                driver = web_driver()                  
 
     def get_killersports_html(self):
         return self.get_html(
@@ -69,7 +74,12 @@ class stats_guy:
             link = row('td').eq(1)('a').attr('href')
             link = link.replace("UTH", "UTA")
             t1 = row('td').eq(4).text()
-            rows.append(game_row(link, t1))
+            if t1 == 'Seventysixers':
+                t1 = '76ers'
+
+            if t1 == 'Trailblazers':
+                t1 = 'Trail Blazers'
+            self.rows.append(game_row(link, t1))
 
         if results_length == MAX_LINKS:
             earliest_date = table("tbody tr > td").eq(0).text()
@@ -105,12 +115,16 @@ class stats_guy:
         ]
         data = pd.DataFrame(columns=columns)
         data = []
-        for row in rows:
+        for row in self.rows:
             link = row.url
             pattern = r"\/boxscores\/(.+)\.html"
             match = re.search(pattern, link)
             file_path = os.path.join("data", match.group(1))
             print(file_path)
+
+            if file_path == 'data\\202312090IND' or file_path == 'data\\202311090ATL':
+                continue
+
             if os.path.exists(file_path):
                 with open(file_path, "r", encoding="utf-8") as file:
                     html = file.read()
@@ -122,13 +136,10 @@ class stats_guy:
 
             if html:
                 doc = pq(html)
-                tables = doc("table[id*=box][id*=game-basic]")
-                
+                tables = doc("table[id*=box][id*=game-basic]")                
                 table1_team = tables('caption').eq(0).text()
                 table2_team = tables('caption').eq(1).text()
-
-                table = None
-
+                table = None            
                 if row.team in table1_team:
                     table = tables.eq(0)
                 elif row.team in table2_team:
@@ -255,14 +266,14 @@ class stats_guy:
         data.insert(1, "PPG", round(data["PTS"] / data["G"], 2))
         data.insert(1, "MPG", round(data["MP"] / data["G"], 2))
         data.insert(1, "FGM", round(data["FG"] / data["G"], 2))
-        data.insert(1, "FGATT", round(data["FGA"] / data["G"], 2))
+        data.insert(1, "FG_ATT", round(data["FGA"] / data["G"], 2))
         data.insert(1, "FTM", round(data["FT"] / data["G"], 2))
-        data.insert(1, "FTATT", round(data["FTA"] / data["G"], 2))
+        data.insert(1, "FT_ATT", round(data["FTA"] / data["G"], 2))
         data.insert(1, "TPG", round(data["TOV"] / data["G"], 2))
         data.insert(1, "FPG", round(data["PF"] / data["G"], 2))
         data.insert(
             1,
-            "P + R + A",
+            "P+R+A",
             round(
                 round(data["PTS"] / data["G"], 2)
                 + round(data["TRB"] / data["G"], 2)
@@ -277,37 +288,49 @@ class stats_guy:
                 "MP",
                 "G",
                 "MPG",
-                "PPG",
-                "RPG",
-                "APG",
-                "P + R + A",
-                "3P",
                 "FGM",
-                "FGATT",
+                "FG_ATT",
                 "FG_PCT",
+                "3P",
                 "3PA",
                 "FG3_PCT",
                 "FTM",
-                "FTATT",
+                "FT_ATT",
                 "FT_PCT",
+                "RPG",
+                "APG",         
                 "SPG",
                 "BPG",
                 "TPG",
                 "FPG",
+                "PPG",
+                "P+R+A",
                 "BPM",
             ]
         ]
 
         data_sorted = data.sort_values(by="MP", ascending=False)
-        data_sorted.to_csv(
-            "C:\\Users\\GiulianTrabucco\\OneDrive - Buyers Edge Platform\\Desktop\\player-stats\\results.txt",
-            sep="\t",
-            index=False,
-        )
+        html_table = self.generate_html_table(data_sorted)
+        return html_table
+
+    def generate_html_table(self, data):
+        player_stats_json = data.to_json()
+        return player_stats_json
 
     def run(self):
         self.get_killersports_links()
-        self.get_player_stats()
+        return self.get_player_stats()
 
-sg = stats_guy(sys.argv[1])
-sg.run()
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/fetch_player_stats', methods=['POST'])
+def fetch_player_stats():
+    sdql_query = request.form.get('sdql')
+    sg = stats_guy(sdql_query)
+    html = sg.run()
+    return html
+
+if __name__ == '__main__':
+    app.run(debug=True)
